@@ -11,7 +11,7 @@ from tqdm.auto import tqdm
 # --- Configuration ---
 MIN_FP_THRESHOLD = 0.35
 RANDOM_STATE = 42
-MODEL_NAME = 'all-MiniLM-L6-v2'
+MODEL_NAME = 'BAAI/bge-small-en-v1.5'
 np.random.seed(RANDOM_STATE)
 
 def load_jsonl(path):
