@@ -1,0 +1,13 @@
+Train Dialogues: 672
+Val Dialogues: 169
+==================================================
+VALIDATION METRICS
+==================================================
+Gap Assignment Accuracy:      0.0830
+Ranked Candidate MRR:         0.1943
+Footprint Attachment Micro F1:0.0237
+Exact Dialogue Recovery:      0.0533
+Dialogue-Balanced Accuracy:   0.0868
+--------------------------------------------------
+FINAL SCORE:                  0.0891
+==================================================
