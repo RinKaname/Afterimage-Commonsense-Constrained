@@ -1,0 +1,23 @@
+==================================================
+DEEP EDA RESULTS
+==================================================
+Utterance Word Count: Min 1, Max 76, Mean 10.55
+Candidate Word Count: Min 2, Max 63, Mean 9.80
+Footprint Word Count: Min 3, Max 33, Mean 10.96
+
+Cosine Sim - Gold vs Context: Mean 0.1112, Median 0.0528
+Cosine Sim - Neg vs Context: Mean 0.0460, Median 0.0000
+
+Footprints per gap:
+  1 footprints: 425 gaps
+  2 footprints: 186 gaps
+  3 footprints: 467 gaps
+  4 footprints: 233 gaps
+  5 footprints: 98 gaps
+  6 footprints: 57 gaps
+  7 footprints: 22 gaps
+  8 footprints: 17 gaps
+  9 footprints: 6 gaps
+  10 footprints: 3 gaps
+  11 footprints: 1 gaps
+  12 footprints: 1 gaps
