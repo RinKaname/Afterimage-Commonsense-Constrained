@@ -171,6 +171,8 @@ def main():
         save_total_limit=2,
         logging_steps=10,
         load_best_model_at_end=True,
+        metric_for_best_model="eval_gap-to-candidate-eval_cosine_mrr@10",
+        greater_is_better=True,
     )
 
     # 6. Train!
