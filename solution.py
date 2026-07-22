@@ -63,30 +63,34 @@ def build_cand_contexts(cand_text):
 def cosine_sim(v1, v2):
     return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-10)
 
-def extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb, fp_embs, ctx_text, cand_text):
+def compute_lexical_overlap(text1, text2):
+    set1 = set(text1.lower().split())
+    set2 = set(text2.lower().split())
+    if not set1 or not set2: return 0.0
+    return len(set1.intersection(set2)) / float(len(set1.union(set2)))
+
+def extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb, fp_embs, ctx_text, cand_text, left_text, right_text, fp_texts):
     # Context features
     sim = cosine_sim(ctx_emb, cand_emb)
     diff = np.abs(ctx_emb - cand_emb)
     mult = ctx_emb * cand_emb
-    len_diff = abs(len(ctx_text.split()) - len(cand_text.split())) / 100.0
+
+    # Lexical features
+    lex_left = compute_lexical_overlap(left_text, cand_text) if left_text else 0
+    lex_right = compute_lexical_overlap(right_text, cand_text) if right_text else 0
 
     # Local coherence
     sim_left = cosine_sim(left_emb, cand_emb) if left_emb is not None else 0
     sim_right = cosine_sim(right_emb, cand_emb) if right_emb is not None else 0
 
-    # Footprint Awareness!
+    # Footprint Awareness (Cleaned based on feature importance)
     fp_max = 0
-    fp_top3_mean = 0
-    fp_top5_mean = 0
 
     if fp_embs is not None and len(fp_embs) > 0:
         fp_sims = [cosine_sim(cand_emb, f) for f in fp_embs]
-        fp_sims.sort(reverse=True)
-        fp_max = fp_sims[0]
-        fp_top3_mean = np.mean(fp_sims[:3]) if len(fp_sims) >= 3 else np.mean(fp_sims)
-        fp_top5_mean = np.mean(fp_sims[:5]) if len(fp_sims) >= 5 else np.mean(fp_sims)
+        fp_max = max(fp_sims)
 
-    return np.concatenate([[sim, len_diff, sim_left, sim_right, fp_max, fp_top3_mean, fp_top5_mean], diff, mult])
+    return np.concatenate([[sim, sim_left, sim_right, lex_left, lex_right, fp_max], diff, mult])
 
 def extract_fp_features(cand_emb, fp_emb):
     sim = cosine_sim(cand_emb, fp_emb)
@@ -144,7 +148,7 @@ def main():
             # Positive Candidate
             if gold_turn_id in cand_emb_map:
                 gold_emb = cand_emb_map[gold_turn_id]
-                X_cand.append(extract_cand_features(ctx_emb, left_emb, right_emb, gold_emb, fp_embs, full_ctx, candidates[gold_turn_id]))
+                X_cand.append(extract_cand_features(ctx_emb, left_emb, right_emb, gold_emb, fp_embs, full_ctx, candidates[gold_turn_id], left_ctx, right_ctx, fp_texts))
                 y_cand.append(1)
 
                 # Hard Negative Mining (Most similar incorrect candidates)
@@ -152,7 +156,7 @@ def main():
                 neg_scores = [(tid, cosine_sim(ctx_emb, cand_emb_map[tid])) for tid in neg_cands]
                 neg_scores.sort(key=lambda x: x[1], reverse=True)
                 for tid, _ in neg_scores[:5]:
-                    X_cand.append(extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb_map[tid], fp_embs, full_ctx, candidates[tid]))
+                    X_cand.append(extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb_map[tid], fp_embs, full_ctx, candidates[tid], left_ctx, right_ctx, fp_texts))
                     y_cand.append(0)
 
                 # Positive Footprints
@@ -174,11 +178,25 @@ def main():
     X_fp, y_fp = np.array(X_fp), np.array(y_fp)
 
     print("Training GBDT Candidate Model...")
-    clf_cand = HistGradientBoostingClassifier(random_state=RANDOM_STATE, max_iter=500, early_stopping=True, l2_regularization=0.1, learning_rate=0.05)
+    clf_cand = HistGradientBoostingClassifier(
+        random_state=RANDOM_STATE,
+        max_iter=800,
+        early_stopping=True,
+        l2_regularization=0.5,
+        learning_rate=0.03,
+        max_depth=7
+    )
     clf_cand.fit(X_cand, y_cand)
 
     print("Training GBDT Footprint Model...")
-    clf_fp = HistGradientBoostingClassifier(random_state=RANDOM_STATE, max_iter=500, early_stopping=True, l2_regularization=0.1, learning_rate=0.05)
+    clf_fp = HistGradientBoostingClassifier(
+        random_state=RANDOM_STATE,
+        max_iter=800,
+        early_stopping=True,
+        l2_regularization=0.5,
+        learning_rate=0.03,
+        max_depth=7
+    )
     if len(X_fp) > 0: clf_fp.fit(X_fp, y_fp)
 
     print("Executing predictions on Test Set...")
@@ -213,7 +231,7 @@ def main():
 
             feats_list = []
             for j, c_text in enumerate(cand_texts):
-                feats = extract_cand_features(ctx_emb, left_emb, right_emb, cand_embs[j], fp_embs, full_ctx, c_text)
+                feats = extract_cand_features(ctx_emb, left_emb, right_emb, cand_embs[j], fp_embs, full_ctx, c_text, left_ctx, right_ctx, fp_texts)
                 feats_list.append(feats)
 
             probs = clf_cand.predict_proba(feats_list)[:, 1]
@@ -246,10 +264,12 @@ def main():
 
                 fp_probs = clf_fp.predict_proba(feats_list)[:, 1]
                 if len(fp_probs) > 0:
-                    dynamic_thresh = max(MIN_FP_THRESHOLD, np.mean(fp_probs) + 0.15)
-                    for f_idx, prob in enumerate(fp_probs):
-                        if prob >= dynamic_thresh:
-                            selected_fp_ids.append(fp_ids[f_idx])
+                    max_prob = np.max(fp_probs)
+                    if max_prob >= MIN_FP_THRESHOLD:
+                        dynamic_thresh = max_prob - 0.10
+                        for f_idx, prob in enumerate(fp_probs):
+                            if prob >= dynamic_thresh:
+                                selected_fp_ids.append(fp_ids[f_idx])
 
             ranking_value = json.dumps(ranked_cand_ids)
             footprint_value = json.dumps(selected_fp_ids)

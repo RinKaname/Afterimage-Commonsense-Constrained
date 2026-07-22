@@ -75,7 +75,6 @@ def extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb, fp_embs, ctx_t
     sim = cosine_sim(ctx_emb, cand_emb)
     diff = np.abs(ctx_emb - cand_emb)
     mult = ctx_emb * cand_emb
-    len_diff = abs(len(ctx_text.split()) - len(cand_text.split())) / 100.0
 
     # Lexical features
     lex_left = compute_lexical_overlap(left_text, cand_text) if left_text else 0
@@ -85,24 +84,14 @@ def extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb, fp_embs, ctx_t
     sim_left = cosine_sim(left_emb, cand_emb) if left_emb is not None else 0
     sim_right = cosine_sim(right_emb, cand_emb) if right_emb is not None else 0
 
-    # Footprint Awareness!
+    # Footprint Awareness (Cleaned based on feature importance)
     fp_max = 0
-    fp_top3_mean = 0
-    fp_top5_mean = 0
-    fp_lex_max = 0
 
     if fp_embs is not None and len(fp_embs) > 0:
         fp_sims = [cosine_sim(cand_emb, f) for f in fp_embs]
-        fp_sims.sort(reverse=True)
-        fp_max = fp_sims[0]
-        fp_top3_mean = np.mean(fp_sims[:3]) if len(fp_sims) >= 3 else np.mean(fp_sims)
-        fp_top5_mean = np.mean(fp_sims[:5]) if len(fp_sims) >= 5 else np.mean(fp_sims)
+        fp_max = max(fp_sims)
 
-    if fp_texts:
-        lex_sims = [compute_lexical_overlap(cand_text, f) for f in fp_texts]
-        fp_lex_max = max(lex_sims) if lex_sims else 0
-
-    return np.concatenate([[sim, len_diff, sim_left, sim_right, lex_left, lex_right, fp_max, fp_top3_mean, fp_top5_mean, fp_lex_max], diff, mult])
+    return np.concatenate([[sim, sim_left, sim_right, lex_left, lex_right, fp_max], diff, mult])
 
 def extract_fp_features(cand_emb, fp_emb):
     sim = cosine_sim(cand_emb, fp_emb)
@@ -189,11 +178,25 @@ def main():
     X_fp, y_fp = np.array(X_fp), np.array(y_fp)
 
     print("Training GBDT Candidate Model...")
-    clf_cand = HistGradientBoostingClassifier(random_state=RANDOM_STATE, max_iter=500, early_stopping=True, l2_regularization=0.1, learning_rate=0.05)
+    clf_cand = HistGradientBoostingClassifier(
+        random_state=RANDOM_STATE,
+        max_iter=800,
+        early_stopping=True,
+        l2_regularization=0.5,
+        learning_rate=0.03,
+        max_depth=7
+    )
     clf_cand.fit(X_cand, y_cand)
 
     print("Training GBDT Footprint Model...")
-    clf_fp = HistGradientBoostingClassifier(random_state=RANDOM_STATE, max_iter=500, early_stopping=True, l2_regularization=0.1, learning_rate=0.05)
+    clf_fp = HistGradientBoostingClassifier(
+        random_state=RANDOM_STATE,
+        max_iter=800,
+        early_stopping=True,
+        l2_regularization=0.5,
+        learning_rate=0.03,
+        max_depth=7
+    )
     if len(X_fp) > 0: clf_fp.fit(X_fp, y_fp)
 
     # Evaluation
@@ -295,10 +298,14 @@ def main():
 
                 fp_probs = clf_fp.predict_proba(feats_list)[:, 1]
                 if len(fp_probs) > 0:
-                    dynamic_thresh = max(MIN_FP_THRESHOLD, np.mean(fp_probs) + 0.15)
-                    for f_idx, prob in enumerate(fp_probs):
-                        if prob >= dynamic_thresh:
-                            selected_fp_ids.append(fp_ids[f_idx])
+                    # Optimize threshold dynamically based on the highest probability footprint
+                    max_prob = np.max(fp_probs)
+                    # We want to pick the top footprints, but if the best one is still awful, pick nothing
+                    if max_prob >= MIN_FP_THRESHOLD:
+                        dynamic_thresh = max_prob - 0.10 # Pick anything within 10% of the best footprint
+                        for f_idx, prob in enumerate(fp_probs):
+                            if prob >= dynamic_thresh:
+                                selected_fp_ids.append(fp_ids[f_idx])
 
             pred_fps = set(selected_fp_ids)
             tp_footprint_local = len(pred_fps.intersection(gold_fps))
