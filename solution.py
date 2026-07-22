@@ -177,27 +177,34 @@ def main():
     X_cand, y_cand = np.array(X_cand), np.array(y_cand)
     X_fp, y_fp = np.array(X_fp), np.array(y_fp)
 
-    print("Training GBDT Candidate Model...")
-    clf_cand = HistGradientBoostingClassifier(
-        random_state=RANDOM_STATE,
-        max_iter=800,
-        early_stopping=True,
-        l2_regularization=0.5,
-        learning_rate=0.03,
-        max_depth=7
-    )
-    clf_cand.fit(X_cand, y_cand)
+    print("Training GBDT Candidate Ensemble (5 seeds)...")
+    clf_cand_ensemble = []
+    for seed in [42, 100, 2023, 777, 999]:
+        clf = HistGradientBoostingClassifier(
+            random_state=seed,
+            max_iter=800,
+            early_stopping=True,
+            l2_regularization=0.5,
+            learning_rate=0.03,
+            max_depth=7
+        )
+        clf.fit(X_cand, y_cand)
+        clf_cand_ensemble.append(clf)
 
-    print("Training GBDT Footprint Model...")
-    clf_fp = HistGradientBoostingClassifier(
-        random_state=RANDOM_STATE,
-        max_iter=800,
-        early_stopping=True,
-        l2_regularization=0.5,
-        learning_rate=0.03,
-        max_depth=7
-    )
-    if len(X_fp) > 0: clf_fp.fit(X_fp, y_fp)
+    print("Training GBDT Footprint Ensemble (5 seeds)...")
+    clf_fp_ensemble = []
+    if len(X_fp) > 0:
+        for seed in [42, 100, 2023, 777, 999]:
+            clf = HistGradientBoostingClassifier(
+                random_state=seed,
+                max_iter=800,
+                early_stopping=True,
+                l2_regularization=0.5,
+                learning_rate=0.03,
+                max_depth=7
+            )
+            clf.fit(X_fp, y_fp)
+            clf_fp_ensemble.append(clf)
 
     print("Executing predictions on Test Set...")
     all_rows = []
@@ -234,8 +241,8 @@ def main():
                 feats = extract_cand_features(ctx_emb, left_emb, right_emb, cand_embs[j], fp_embs, full_ctx, c_text, left_ctx, right_ctx, fp_texts)
                 feats_list.append(feats)
 
-            probs = clf_cand.predict_proba(feats_list)[:, 1]
-            prob_matrix[i, :] = probs
+            ensemble_probs = np.mean([clf.predict_proba(feats_list)[:, 1] for clf in clf_cand_ensemble], axis=0)
+            prob_matrix[i, :] = ensemble_probs
 
         cost_matrix = -prob_matrix
         row_ind, col_ind = linear_sum_assignment(cost_matrix)
@@ -262,7 +269,7 @@ def main():
                     feats = extract_fp_features(cand_emb, f_emb)
                     feats_list.append(feats)
 
-                fp_probs = clf_fp.predict_proba(feats_list)[:, 1]
+                fp_probs = np.mean([clf.predict_proba(feats_list)[:, 1] for clf in clf_fp_ensemble], axis=0)
                 if len(fp_probs) > 0:
                     max_prob = np.max(fp_probs)
                     if max_prob >= MIN_FP_THRESHOLD:
