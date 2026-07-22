@@ -1,0 +1,17 @@
+Train Dialogues: 672
+Val Dialogues: 169
+Loading SentenceTransformer model...
+Pre-computing train embeddings...
+Training GBDT Candidate Model...
+Training GBDT Footprint Model...
+==================================================
+VALIDATION METRICS (FOOTPRINT-AWARE MODEL)
+==================================================
+Gap Assignment Accuracy:      0.4637
+Ranked Candidate MRR:         0.6309
+Footprint Attachment Micro F1:0.1337
+Exact Dialogue Recovery:      0.4379
+Dialogue-Balanced Accuracy:   0.5296
+--------------------------------------------------
+FINAL SCORE:                  0.4305
+==================================================
