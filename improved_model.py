@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 # --- Configuration ---
 MIN_FP_THRESHOLD = 0.35
 RANDOM_STATE = 42
-MODEL_NAME = 'BAAI/bge-small-en-v1.5'
+MODEL_NAME = 'RinKana/bge-small-en-v1.5-afterimage'
 np.random.seed(RANDOM_STATE)
 
 def load_jsonl(path):
@@ -47,12 +47,16 @@ def build_gap_contexts(dialogue, gap_id):
     left_str = " ".join(left_context[-5:])
     right_str = " ".join(right_context[:5])
 
+    immediate_left = left_context[-1] if left_context else ""
+    immediate_right = right_context[0] if right_context else ""
+
     full_context_text = (
+        f"Represent this dialogue context for retrieving the missing turn: "
         f"Speaker {gap_speaker} is replying. "
         f"Previous context: {left_str} "
         f"Following context: {right_str}"
     )
-    return full_context_text
+    return full_context_text, immediate_left, immediate_right
 
 def build_cand_contexts(cand_text):
     return f"Candidate response: {cand_text}"
@@ -60,13 +64,45 @@ def build_cand_contexts(cand_text):
 def cosine_sim(v1, v2):
     return np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-10)
 
-def extract_cand_features(ctx_emb, cand_emb, ctx_text, cand_text):
+def compute_lexical_overlap(text1, text2):
+    set1 = set(text1.lower().split())
+    set2 = set(text2.lower().split())
+    if not set1 or not set2: return 0.0
+    return len(set1.intersection(set2)) / float(len(set1.union(set2)))
+
+def extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb, fp_embs, ctx_text, cand_text, left_text, right_text, fp_texts):
+    # Context features
     sim = cosine_sim(ctx_emb, cand_emb)
     diff = np.abs(ctx_emb - cand_emb)
     mult = ctx_emb * cand_emb
     len_diff = abs(len(ctx_text.split()) - len(cand_text.split())) / 100.0
 
-    return np.concatenate([[sim, len_diff], diff, mult])
+    # Lexical features
+    lex_left = compute_lexical_overlap(left_text, cand_text) if left_text else 0
+    lex_right = compute_lexical_overlap(right_text, cand_text) if right_text else 0
+
+    # Local coherence
+    sim_left = cosine_sim(left_emb, cand_emb) if left_emb is not None else 0
+    sim_right = cosine_sim(right_emb, cand_emb) if right_emb is not None else 0
+
+    # Footprint Awareness!
+    fp_max = 0
+    fp_top3_mean = 0
+    fp_top5_mean = 0
+    fp_lex_max = 0
+
+    if fp_embs is not None and len(fp_embs) > 0:
+        fp_sims = [cosine_sim(cand_emb, f) for f in fp_embs]
+        fp_sims.sort(reverse=True)
+        fp_max = fp_sims[0]
+        fp_top3_mean = np.mean(fp_sims[:3]) if len(fp_sims) >= 3 else np.mean(fp_sims)
+        fp_top5_mean = np.mean(fp_sims[:5]) if len(fp_sims) >= 5 else np.mean(fp_sims)
+
+    if fp_texts:
+        lex_sims = [compute_lexical_overlap(cand_text, f) for f in fp_texts]
+        fp_lex_max = max(lex_sims) if lex_sims else 0
+
+    return np.concatenate([[sim, len_diff, sim_left, sim_right, lex_left, lex_right, fp_max, fp_top3_mean, fp_top5_mean, fp_lex_max], diff, mult])
 
 def extract_fp_features(cand_emb, fp_emb):
     sim = cosine_sim(cand_emb, fp_emb)
@@ -91,7 +127,6 @@ def main():
     print("Loading SentenceTransformer model...")
     encoder = SentenceTransformer(MODEL_NAME)
 
-    # Pre-compute embeddings for train
     print("Pre-computing train embeddings...")
     X_cand, y_cand = [], []
     X_fp, y_fp = [], []
@@ -116,21 +151,23 @@ def main():
             gap_id = ans["gap_id"]
             gold_turn_id = ans["turn_id"]
 
-            full_ctx = build_gap_contexts(dialogue, gap_id)
+            full_ctx, left_ctx, right_ctx = build_gap_contexts(dialogue, gap_id)
             ctx_emb = encoder.encode([full_ctx], show_progress_bar=False)[0]
+            left_emb = encoder.encode([left_ctx], show_progress_bar=False)[0] if left_ctx else None
+            right_emb = encoder.encode([right_ctx], show_progress_bar=False)[0] if right_ctx else None
 
             # Positive Candidate
             if gold_turn_id in cand_emb_map:
                 gold_emb = cand_emb_map[gold_turn_id]
-                X_cand.append(extract_cand_features(ctx_emb, gold_emb, full_ctx, candidates[gold_turn_id]))
+                X_cand.append(extract_cand_features(ctx_emb, left_emb, right_emb, gold_emb, fp_embs, full_ctx, candidates[gold_turn_id], left_ctx, right_ctx, fp_texts))
                 y_cand.append(1)
 
-                # Hard Negative Candidates (top 5 most similar by cosine sim to context)
+                # Hard Negative Mining (Most similar incorrect candidates)
                 neg_cands = [tid for tid in candidates.keys() if tid != gold_turn_id]
                 neg_scores = [(tid, cosine_sim(ctx_emb, cand_emb_map[tid])) for tid in neg_cands]
                 neg_scores.sort(key=lambda x: x[1], reverse=True)
                 for tid, _ in neg_scores[:5]:
-                    X_cand.append(extract_cand_features(ctx_emb, cand_emb_map[tid], full_ctx, candidates[tid]))
+                    X_cand.append(extract_cand_features(ctx_emb, left_emb, right_emb, cand_emb_map[tid], fp_embs, full_ctx, candidates[tid], left_ctx, right_ctx, fp_texts))
                     y_cand.append(0)
 
                 # Positive Footprints
@@ -151,7 +188,6 @@ def main():
     X_cand, y_cand = np.array(X_cand), np.array(y_cand)
     X_fp, y_fp = np.array(X_fp), np.array(y_fp)
 
-    # Train Models
     print("Training GBDT Candidate Model...")
     clf_cand = HistGradientBoostingClassifier(random_state=RANDOM_STATE, max_iter=500, early_stopping=True, l2_regularization=0.1, learning_rate=0.05)
     clf_cand.fit(X_cand, y_cand)
@@ -193,13 +229,16 @@ def main():
         prob_matrix = np.zeros((len(gap_ids), len(cand_ids)))
 
         for i, g_id in enumerate(gap_ids):
-            full_ctx = build_gap_contexts(dialogue, g_id)
+            full_ctx, left_ctx, right_ctx = build_gap_contexts(dialogue, g_id)
             ctx_emb = encoder.encode([full_ctx], show_progress_bar=False)[0]
+            left_emb = encoder.encode([left_ctx], show_progress_bar=False)[0] if left_ctx else None
+            right_emb = encoder.encode([right_ctx], show_progress_bar=False)[0] if right_ctx else None
 
             feats_list = []
             for j, c_text in enumerate(cand_texts):
-                feats = extract_cand_features(ctx_emb, cand_embs[j], full_ctx, c_text)
+                feats = extract_cand_features(ctx_emb, left_emb, right_emb, cand_embs[j], fp_embs, full_ctx, c_text, left_ctx, right_ctx, fp_texts)
                 feats_list.append(feats)
+
             probs = clf_cand.predict_proba(feats_list)[:, 1]
             prob_matrix[i, :] = probs
 
@@ -255,9 +294,8 @@ def main():
                     feats_list.append(feats)
 
                 fp_probs = clf_fp.predict_proba(feats_list)[:, 1]
-
                 if len(fp_probs) > 0:
-                    dynamic_thresh = max(MIN_FP_THRESHOLD, np.mean(fp_probs) + 0.15) # Stricter footprint threshold
+                    dynamic_thresh = max(MIN_FP_THRESHOLD, np.mean(fp_probs) + 0.15)
                     for f_idx, prob in enumerate(fp_probs):
                         if prob >= dynamic_thresh:
                             selected_fp_ids.append(fp_ids[f_idx])
@@ -289,7 +327,7 @@ def main():
     final_score = (0.40 * gap_acc) + (0.20 * mrr) + (0.20 * fp_f1) + (0.15 * exact_rec) + (0.05 * bal_acc)
 
     print("==================================================")
-    print("VALIDATION METRICS (IMPROVED MODEL)")
+    print("VALIDATION METRICS (FOOTPRINT-AWARE MODEL)")
     print("==================================================")
     print(f"Gap Assignment Accuracy:      {gap_acc:.4f}")
     print(f"Ranked Candidate MRR:         {mrr:.4f}")
