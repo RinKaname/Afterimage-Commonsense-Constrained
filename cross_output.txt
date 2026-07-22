@@ -1,0 +1,15 @@
+Train Dialogues: 672
+Val Dialogues: 169
+Loading Bi-Encoder (BAAI/bge-small-en-v1.5)...
+Loading Cross-Encoder (cross-encoder/ms-marco-MiniLM-L-6-v2)...
+==================================================
+VALIDATION METRICS (STAGE 1 & 2 CROSS-ENCODER)
+==================================================
+Gap Assignment Accuracy:      0.2422
+Ranked Candidate MRR:         0.3728
+Footprint Attachment Micro F1:0.0221
+Exact Dialogue Recovery:      0.2012
+Dialogue-Balanced Accuracy:   0.2771
+--------------------------------------------------
+FINAL SCORE:                  0.2199
+==================================================

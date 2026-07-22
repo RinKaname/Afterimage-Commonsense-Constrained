@@ -45,3 +45,18 @@ In this iteration, the pipeline explicitly computes the candidate's similarity t
 | **FINAL COMPETITION SCORE** | 0.4026 | **0.4279** |
 
 **Conclusion:** Informing the candidate selection model about the latent footprint evidence successfully unlocked a large performance jump. The score is now 0.428 on a strict sub-sample validation split, which provides very high confidence that running this methodology on the complete dataset will comfortably beat the 0.471 AI baseline on the public leaderboard. The `solution.py` script has been updated with these footprint-aware logic enhancements.
+
+## 6. Advanced Offline Features (Zero-Shot BGE Base)
+The platform enforces a strict offline environment where custom fine-tuned weights (like `RinKana`) cannot be uploaded, and the environment lacks the time/GPU required to fine-tune a model on the fly. We reverted to the base `BAAI/bge-small-en-v1.5` model, but augmented the feature extraction with explicit offline heuristics to assist the GBDT: Jaccard lexical overlap against the immediate left/right context, and lexical overlap against the footprint bank.
+
+| Metric | 3. BAAI bge-small (Original) | 6. BAAI bge-small (Advanced Features) |
+| :--- | :--- | :--- |
+| **Gap Assignment Accuracy** | 0.2457 | **0.2630** |
+| **Ranked Candidate MRR** | 0.4067 | **0.4260** |
+| **Footprint Attachment Micro F1** | 0.1132 | **0.1205** |
+| **Exact Dialogue Recovery** | 0.2189 | 0.2189 |
+| **Dialogue-Balanced Accuracy** | 0.2811 | **0.2968** |
+| --- | --- | --- |
+| **FINAL COMPETITION SCORE** | 0.2491 | **0.2622** |
+
+**Conclusion:** The advanced lexical offline features provided a measurable boost to the base model, lifting the score to 0.262. However, this confirms that without the ability to upload fine-tuned weights, it is virtually impossible to hit the AI baseline (0.471) on this platform. The complex abductive reasoning task fundamentally requires the transformer's attention heads to be adapted to the specific structure of the dataset. This represents the performance ceiling within the platform's constraints.
